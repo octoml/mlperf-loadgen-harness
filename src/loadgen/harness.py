@@ -4,7 +4,7 @@ import typing
 
 import mlperf_loadgen
 
-from loadgen.model import Model, ModelInput, ModelInputSampler
+from loadgen.model import ModelInput, ModelInputSampler
 
 logger = logging.getLogger(__name__)
 
@@ -14,9 +14,6 @@ QueryResult = typing.Dict[int, typing.Any]
 
 
 class ModelRunner(abc.ABC):
-    def __init__(self, model: Model):
-        self.model = model
-
     @abc.abstractmethod
     def issue_query(self, query: QueryInput) -> typing.Optional[QueryResult]:
         pass

@@ -8,7 +8,13 @@ ModelInput = typing.Dict[str, np.array]
 
 class Model(abc.ABC):
     @abc.abstractmethod
-    def predict(self, input: ModelInput):
+    def predict(self, input: ModelInput) -> typing.Any:
+        pass
+
+
+class ModelFactory(abc.ABC):
+    @abc.abstractmethod
+    def create(self) -> Model:
         pass
 
 

@@ -4,7 +4,7 @@ import numpy as np
 import onnx
 import onnxruntime as ort
 
-from loadgen.model import Model, ModelInput, ModelInputSampler
+from loadgen.model import Model, ModelFactory, ModelInput, ModelInputSampler
 
 ONNX_TO_NP_TYPE_MAP = {
     "tensor(bool)": np.bool,
@@ -24,23 +24,48 @@ ONNX_TO_NP_TYPE_MAP = {
 
 
 class ORTModel(Model):
-    def __init__(self, model_path, ep="CPUExecutionProvider"):
-        model = onnx.load(model_path)
-        session_options = ort.SessionOptions()
-        # session_options.execution_mode
-        # session_options.intra_op_num_threads = 0
-        # session_options.inter_op_num_threads = 0
-        session_eps = [ep]
-        self.session = ort.InferenceSession(
-            model.SerializeToString(), session_options, providers=session_eps
-        )
+    def __init__(self, session: ort.InferenceSession):
+        assert session is not None
+        self.session = session
 
     def predict(self, input: ModelInput):
         return self.session.run(None, input)
 
+    def clone(self):
+        return ORTModel(self.model_path, self.ep)
+
+
+class ORTModelFactory(ModelFactory):
+    def __init__(
+        self,
+        model_path: str,
+        execution_provider="CPUExecutionProvider",
+        execution_mode="",
+        intra_op_threads=0,
+        inter_op_threads=0,
+    ):
+        self.model_path = model_path
+        self.execution_provider = execution_provider
+        self.session_options = ort.SessionOptions()
+        if execution_mode.lower() == "sequential":
+            self.session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        elif execution_mode.lower() == "parallel":
+            self.session_options.execution_mode = ort.ExecutionMode.ORT_PARALLEL
+        self.session_options.intra_op_num_threads = intra_op_threads
+        self.session_options.inter_op_num_threads = inter_op_threads
+
+    def create(self) -> Model:
+        model = onnx.load(self.model_path)
+        session_eps = [self.execution_provider]
+        session = ort.InferenceSession(
+            model.SerializeToString(), self.session_options, providers=session_eps
+        )
+        return ORTModel(session)
+
 
 class ORTModelInputSampler(ModelInputSampler):
-    def __init__(self, model: ORTModel):
+    def __init__(self, model_factory: ORTModelFactory):
+        model = model_factory.create()
         input_defs = model.session.get_inputs()
         self.inputs: typing.Dict[str, typing.Tuple[np.dtype, typing.List[int]]] = dict()
         for input in input_defs:

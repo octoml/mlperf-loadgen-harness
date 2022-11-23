@@ -1,35 +1,40 @@
+import abc
 import concurrent.futures
 import logging
 import multiprocessing
+import threading
 import typing
 
 from loadgen.harness import ModelRunner, QueryInput, QueryResult
-from loadgen.model import Model, ModelInput
+from loadgen.model import Model, ModelFactory, ModelInput
 
 logger = logging.getLogger(__name__)
 
 ######## Runner implementations
 
 
-class ModelRunnerBasic(ModelRunner):
+class ModelRunnerInline(ModelRunner):
+    def __init__(self, model_factory: ModelFactory):
+        self.model = model_factory.create()
+
     def issue_query(self, queries: QueryInput) -> typing.Optional[QueryResult]:
         result = dict()
-        for query_id, query_input in queries.items():
-            output = self.model.predict(query_input)
+        for query_id, model_input in queries.items():
+            output = self.model.predict(model_input)
             result[query_id] = output
         return result
 
 
 class ModelRunnerPoolExecutor(ModelRunner):
-    def __init__(self, model: Model, executor: concurrent.futures.Executor):
-        super().__init__(model)
+    def __init__(self, executor: concurrent.futures.Executor):
         self.executor = executor
         self.futures = None
 
     def issue_query(self, queries: QueryInput) -> typing.Optional[QueryResult]:
         self.futures = dict()
-        for query_id, query_input in queries.items():
-            f = self.executor.submit(self.model.predict, query_input)
+        predictor_fn = self.get_predictor()
+        for query_id, model_input in queries.items():
+            f = self.executor.submit(predictor_fn, model_input)
             self.futures[f] = query_id
         return None
 
@@ -41,31 +46,58 @@ class ModelRunnerPoolExecutor(ModelRunner):
             result[query_id] = query_result
         return result
 
+    @abc.abstractmethod
+    def get_predictor(self) -> typing.Callable[[ModelInput], typing.Any]:
+        pass
+
 
 class ModelRunnerThreadPoolExecutor(ModelRunnerPoolExecutor):
-    def __init__(self, model: Model, max_concurrency: int):
+    def __init__(self, model_factory: ModelFactory, max_concurrency: int):
         executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=max_concurrency, thread_name_prefix="LoadGen"
         )
-        super().__init__(model, executor)
+        super().__init__(executor)
+        self.model = model_factory.create()
+
+    def get_predictor(self) -> typing.Callable[[ModelInput], typing.Any]:
+        return self.model.predict
+
+
+class ModelRunnerThreadPoolExecutorWithTLS(ModelRunnerPoolExecutor):
+    tls: threading.local
+
+    def __init__(self, model_factory: ModelFactory, max_concurrency: int):
+        executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=max_concurrency,
+            thread_name_prefix="LoadGen",
+            initializer=ModelRunnerThreadPoolExecutorWithTLS._tls_init,
+            initargs=(model_factory,),
+        )
+        super().__init__(executor)
+
+    def get_predictor(self) -> typing.Callable[[ModelInput], typing.Any]:
+        return ModelRunnerThreadPoolExecutorWithTLS._tls_predict
+
+    @staticmethod
+    def _tls_init(model_factory: ModelFactory):
+        ModelRunnerThreadPoolExecutorWithTLS.tls = threading.local()
+        ModelRunnerThreadPoolExecutorWithTLS.tls.model = model_factory.create()
+
+    @staticmethod
+    def _tls_predict(input: ModelInput):
+        return ModelRunnerThreadPoolExecutorWithTLS.tls.model.predict(input)
 
 
 class ModelRunnerProcessPoolExecutor(ModelRunnerPoolExecutor):
     _model: Model
 
-    def __init__(self, model: Model, max_concurrency: int):
+    def __init__(self, model_factory: ModelFactory, max_concurrency: int):
         executor = concurrent.futures.ProcessPoolExecutor(max_workers=max_concurrency)
-        ModelRunnerProcessPoolExecutor._model = model
-        super().__init__(model, executor)
+        ModelRunnerProcessPoolExecutor._model = model_factory.create()
+        super().__init__(executor)
 
-    def issue_query(self, queries: QueryInput) -> typing.Optional[QueryResult]:
-        self.futures = dict()
-        for query_id, query_input in queries.items():
-            f = self.executor.submit(
-                ModelRunnerProcessPoolExecutor._predict, query_input
-            )
-            self.futures[f] = query_id
-        return None
+    def get_predictor(self) -> typing.Callable[[ModelInput], typing.Any]:
+        return ModelRunnerProcessPoolExecutor._predict
 
     @staticmethod
     def _predict(input: ModelInput):
@@ -77,10 +109,12 @@ class ModelRunnerMultiProcessingPool(ModelRunner):
     _model: Model
 
     def __init__(
-        self, model: Model, max_concurrency: int, granular_tasks: bool = False
+        self,
+        model_factory: ModelFactory,
+        max_concurrency: int,
+        granular_tasks: bool = False,
     ):
-        super().__init__(model)
-        ModelRunnerMultiProcessingPool._model = model
+        ModelRunnerMultiProcessingPool._model = model_factory.create()
         self.pool = multiprocessing.Pool(max_concurrency)
         if granular_tasks:
             self.tasks: typing.List[multiprocessing.ApplyResult] = {}
@@ -90,15 +124,15 @@ class ModelRunnerMultiProcessingPool(ModelRunner):
     def issue_query(self, queries: QueryInput) -> typing.Optional[QueryResult]:
         if hasattr(self, "tasks"):
             assert len(self.tasks) == 0
-            for query_id, query_input in queries.items():
+            for query_id, model_input in queries.items():
                 task = self.pool.apply_async(
-                    ModelRunnerMultiProcessingPool._predict, (query_input,)
+                    ModelRunnerMultiProcessingPool._predict, (model_input,)
                 )
                 self.tasks[task] = query_id
         else:
             assert self.task is None
             inputs = [
-                [query_id, query_input] for query_id, query_input in queries.items()
+                [query_id, model_input] for query_id, model_input in queries.items()
             ]
             self.task = self.pool.starmap_async(
                 ModelRunnerMultiProcessingPool._predict_with_id, inputs
