@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import logging
 import os
 import typing
@@ -19,8 +20,9 @@ from ort import ORTModelFactory, ORTModelInputSampler
 logger = logging.getLogger(__name__)
 
 
+LOADGEN_EXPECTED_QPS = 50
 LOADGEN_SAMPLE_COUNT = 100
-LOADGEN_DURATION_SECs = 10
+LOADGEN_DURATION_SEC = 10
 
 
 def main(
@@ -67,9 +69,9 @@ def main(
     settings = mlperf_loadgen.TestSettings()
     settings.scenario = mlperf_loadgen.TestScenario.Offline
     settings.mode = mlperf_loadgen.TestMode.PerformanceOnly
-    settings.offline_expected_qps = 30
+    settings.offline_expected_qps = LOADGEN_EXPECTED_QPS
     settings.min_query_count = LOADGEN_SAMPLE_COUNT * 2
-    settings.min_duration_ms = LOADGEN_DURATION_SECs * 1000
+    settings.min_duration_ms = LOADGEN_DURATION_SEC * 1000
     # Duration isn't enforced in offline mode
     # Instead, it is used to determine total sample count via
     # target_sample_count = Slack (1.1) * TargetQPS (1) * TargetDuration ()
@@ -91,27 +93,29 @@ def main(
     logger.info(f"Runner: {runner_name}, Concurrency: {runner_concurrency}")
     logger.info(f"Results: {output_path}")
 
-    harness = Harness(model_dataset, runner)
-    try:
-        query_sample_libary = mlperf_loadgen.ConstructQSL(
-            LOADGEN_SAMPLE_COUNT,  # Total sample count
-            LOADGEN_SAMPLE_COUNT,  # Num to load in RAM at a time
-            harness.load_query_samples,
-            harness.unload_query_samples,
-        )
-        system_under_test = mlperf_loadgen.ConstructSUT(
-            harness.issue_query, harness.flush_queries
-        )
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(runner)
+        harness = Harness(model_dataset, runner)
+        try:
+            query_sample_libary = mlperf_loadgen.ConstructQSL(
+                LOADGEN_SAMPLE_COUNT,  # Total sample count
+                LOADGEN_SAMPLE_COUNT,  # Num to load in RAM at a time
+                harness.load_query_samples,
+                harness.unload_query_samples,
+            )
+            system_under_test = mlperf_loadgen.ConstructSUT(
+                harness.issue_query, harness.flush_queries
+            )
 
-        logger.info("Test Started")
-        mlperf_loadgen.StartTestWithLogSettings(
-            system_under_test, query_sample_libary, settings, log_settings
-        )
+            logger.info("Test Started")
+            mlperf_loadgen.StartTestWithLogSettings(
+                system_under_test, query_sample_libary, settings, log_settings
+            )
 
-    finally:
-        mlperf_loadgen.DestroySUT(system_under_test)
-        mlperf_loadgen.DestroyQSL(query_sample_libary)
-        logger.info("Test Completed")
+        finally:
+            mlperf_loadgen.DestroySUT(system_under_test)
+            mlperf_loadgen.DestroyQSL(query_sample_libary)
+            logger.info("Test Completed")
 
 
 if __name__ == "__main__":
@@ -142,12 +146,13 @@ if __name__ == "__main__":
         "--concurrency",
         help="concurrency count for runner",
         default=psutil.cpu_count(False),
+        type=int,
     )
     parser.add_argument(
         "--ep", help="Execution Provider", default="CPUExecutionProvider"
     )
-    parser.add_argument("--intraop", help="IntraOp threads", default=0)
-    parser.add_argument("--interop", help="InterOp threads", default=0)
+    parser.add_argument("--intraop", help="IntraOp threads", default=0, type=int)
+    parser.add_argument("--interop", help="InterOp threads", default=0, type=int)
     parser.add_argument(
         "--execmode",
         help="Execution Mode",

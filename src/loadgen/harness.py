@@ -1,4 +1,5 @@
 import abc
+import contextlib
 import logging
 import typing
 
@@ -13,7 +14,7 @@ QueryInput = typing.Dict[int, ModelInput]
 QueryResult = typing.Dict[int, typing.Any]
 
 
-class ModelRunner(abc.ABC):
+class ModelRunner(contextlib.AbstractContextManager):
     @abc.abstractmethod
     def issue_query(self, query: QueryInput) -> typing.Optional[QueryResult]:
         pass
@@ -21,6 +22,10 @@ class ModelRunner(abc.ABC):
     # Optional method to flush pending queries
     def flush_queries(self) -> typing.Optional[QueryResult]:
         pass
+
+    def __exit__(self, _exc_type, _exc_value, _traceback):
+        logger.info(f"{self} : Exited")
+        return None
 
 
 class Harness:

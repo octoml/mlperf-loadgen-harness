@@ -26,9 +26,14 @@ class ModelRunnerInline(ModelRunner):
 
 
 class ModelRunnerPoolExecutor(ModelRunner):
-    def __init__(self, executor: concurrent.futures.Executor):
-        self.executor = executor
+    def __init__(self):
+        self.executor: concurrent.futures.Executor = None
         self.futures = None
+
+    def __exit__(self, _exc_type, _exc_value, _traceback):
+        if self.executor:
+            self.executor.shutdown(True)
+        return super().__exit__(_exc_type, _exc_value, _traceback)
 
     def issue_query(self, queries: QueryInput) -> typing.Optional[QueryResult]:
         self.futures = dict()
@@ -53,11 +58,15 @@ class ModelRunnerPoolExecutor(ModelRunner):
 
 class ModelRunnerThreadPoolExecutor(ModelRunnerPoolExecutor):
     def __init__(self, model_factory: ModelFactory, max_concurrency: int):
-        executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=max_concurrency, thread_name_prefix="LoadGen"
-        )
-        super().__init__(executor)
+        super().__init__()
         self.model = model_factory.create()
+        self.max_concurrency = max_concurrency
+
+    def __enter__(self):
+        self.executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.max_concurrency, thread_name_prefix="LoadGen"
+        )
+        return self
 
     def get_predictor(self) -> typing.Callable[[ModelInput], typing.Any]:
         return self.model.predict
@@ -67,13 +76,18 @@ class ModelRunnerThreadPoolExecutorWithTLS(ModelRunnerPoolExecutor):
     tls: threading.local
 
     def __init__(self, model_factory: ModelFactory, max_concurrency: int):
-        executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=max_concurrency,
+        super().__init__()
+        self.model_factory = model_factory
+        self.max_concurrency = max_concurrency
+
+    def __enter__(self):
+        self.executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.max_concurrency,
             thread_name_prefix="LoadGen",
             initializer=ModelRunnerThreadPoolExecutorWithTLS._tls_init,
-            initargs=(model_factory,),
+            initargs=(self.model_factory,),
         )
-        super().__init__(executor)
+        return self
 
     def get_predictor(self) -> typing.Callable[[ModelInput], typing.Any]:
         return ModelRunnerThreadPoolExecutorWithTLS._tls_predict
@@ -92,9 +106,15 @@ class ModelRunnerProcessPoolExecutor(ModelRunnerPoolExecutor):
     _model: Model
 
     def __init__(self, model_factory: ModelFactory, max_concurrency: int):
-        executor = concurrent.futures.ProcessPoolExecutor(max_workers=max_concurrency)
+        super().__init__()
+        self.max_concurrency = max_concurrency
         ModelRunnerProcessPoolExecutor._model = model_factory.create()
-        super().__init__(executor)
+
+    def __enter__(self):
+        self.executor = concurrent.futures.ProcessPoolExecutor(
+            max_workers=self.max_concurrency
+        )
+        return self
 
     def get_predictor(self) -> typing.Callable[[ModelInput], typing.Any]:
         return ModelRunnerProcessPoolExecutor._predict
@@ -112,14 +132,18 @@ class ModelRunnerMultiProcessingPool(ModelRunner):
         self,
         model_factory: ModelFactory,
         max_concurrency: int,
-        granular_tasks: bool = False,
     ):
+        self.max_concurrency = max_concurrency
+        self.task: multiprocessing.ApplyResult = None
         ModelRunnerMultiProcessingPool._model = model_factory.create()
-        self.pool = multiprocessing.Pool(max_concurrency)
-        if granular_tasks:
-            self.tasks: typing.List[multiprocessing.ApplyResult] = {}
-        else:
-            self.task: multiprocessing.ApplyResult = None
+
+    def __enter__(self):
+        self.pool = multiprocessing.Pool(self.max_concurrency)
+
+    def __exit__(self, _exc_type, _exc_value, _traceback):
+        if self.pool:
+            self.pool.terminate()
+        return super().__exit__(_exc_type, _exc_value, _traceback)
 
     def issue_query(self, queries: QueryInput) -> typing.Optional[QueryResult]:
         if hasattr(self, "tasks"):
