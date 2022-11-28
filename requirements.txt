@@ -1,4 +1,5 @@
-./bin/mlperf_loadgen-2.1-cp38-cp38-linux_x86_64.whl
+./bin/mlperf_loadgen-2.1-cp38-cp38-linux_x86_64.whl; platform_machine == "x86_64" and platform_system == "Linux"
+./bin/mlperf_loadgen-2.1-cp38-cp38-linux_aarch64.whl; platform_machine == "aarch64" and platform_system == "Linux"
 coloredlogs==15.0.1
 flatbuffers==22.10.26
 humanfriendly==10.0
