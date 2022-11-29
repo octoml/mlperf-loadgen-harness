@@ -31,9 +31,6 @@ class ORTModel(Model):
     def predict(self, input: ModelInput):
         return self.session.run(None, input)
 
-    def clone(self):
-        return ORTModel(self.model_path, self.ep)
-
 
 class ORTModelFactory(ModelFactory):
     def __init__(

@@ -2,6 +2,7 @@ import argparse
 import contextlib
 import logging
 import os
+import re
 import typing
 
 import mlperf_loadgen
@@ -111,6 +112,17 @@ def main(
             mlperf_loadgen.StartTestWithLogSettings(
                 system_under_test, query_sample_libary, settings, log_settings
             )
+
+            # Parse output file
+            output_summary = {}
+            output_summary_path = os.path.join(output_path, "mlperf_log_summary.txt")
+            with open(output_summary_path, "r") as output_summary_file:
+                for line in output_summary_file:
+                    m = re.match(r"^\s*([\w\s.\(\)\/]+)\s*\:\s*([\w\+\.]+).*", line)
+                    if m:
+                        output_summary[m.group(1).strip()] = m.group(2).strip()
+            logger.info("Observed QPS: " + output_summary.get("Samples per second"))
+            logger.info("Result: " + output_summary.get("Result is"))
 
         finally:
             mlperf_loadgen.DestroySUT(system_under_test)

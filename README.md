@@ -2,9 +2,11 @@ A simple harness to run an ONNX model in various concurrency and replication set
 
 ## Setup
 
-Install requirement.txt and requirements.dev.txt if developing in VSCode.
-You may need to build the LoadGen wheel if the provided version (Linux/x64) doesn't match your setup. 
-It can be built via instructions [here](https://github.com/mlcommons/inference/tree/master/loadgen/demos/lon#setup)
+Install requirement.txt in your Python 3.8 (virtual) environment.
+Also install requirements.dev.txt if developing in VSCode.
+
+You may need to build the LoadGen wheel if the provided versions in the /bin folder (Linux x64 and aarch64) do not match your setup.
+If necessary, it can be built via instructions [here](https://github.com/mlcommons/inference/tree/master/loadgen/demos/lon#setup)
 ```
 git clone --recurse-submodules https://github.com/mlcommons/inference.git mlperf_inference
 cd mlperf_inference/loadgen
@@ -12,6 +14,8 @@ CFLAGS="-std=c++14 -O3" python setup.py bdist_wheel
 ```
 
 ## Usage
+
+The following arguments are supported.
 
 ```
 usage: main.py [-h] [-o OUTPUT] [-r {inline,threadpool,threadpool+replication,processpool,processpool+mp}] [--concurrency CONCURRENCY] [--ep EP] [--intraop INTRAOP]
@@ -36,3 +40,8 @@ optional arguments:
                         Execution Mode
  ```
 
+For e.g.
+
+```
+python src/main.py ../models/yolov5s.onnx --runner threadpool --ep CPUExecutionProvider --concurrency 4
+```
