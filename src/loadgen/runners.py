@@ -5,7 +5,7 @@ import multiprocessing
 import threading
 import typing
 
-from loadgen.harness import ModelRunner, QueryCallback, QueryInput, QueryResult
+from loadgen.harness import ModelRunner, QueryCallback, QueryInput
 from loadgen.model import Model, ModelFactory, ModelInput
 
 logger = logging.getLogger(__name__)
@@ -24,10 +24,11 @@ class ModelRunnerInline(ModelRunner):
 
 
 class ModelRunnerPoolExecutor(ModelRunner):
-    def __init__(self):
-        self.executor: concurrent.futures.Executor = None
+    def __init__(self, max_concurrency: int):
+        self.max_concurrency = max_concurrency
         self.futures: typing.Dict[concurrent.futures.Future, int] = {}
-        self.callback_fn: QueryCallback = None
+        self.executor: typing.Optional[concurrent.futures.Executor] = None
+        self.callback_fn: typing.Optional[QueryCallback] = None
 
     def __exit__(self, _exc_type, _exc_value, _traceback):
         if self.executor:
@@ -43,9 +44,6 @@ class ModelRunnerPoolExecutor(ModelRunner):
             self.futures[f] = query_id
             f.add_done_callback(self._future_callback)
 
-    def flush_queries(self) -> typing.Optional[QueryResult]:
-        pass
-
     @abc.abstractmethod
     def get_predictor(self) -> typing.Callable[[ModelInput], typing.Any]:
         pass
@@ -58,9 +56,8 @@ class ModelRunnerPoolExecutor(ModelRunner):
 
 class ModelRunnerThreadPoolExecutor(ModelRunnerPoolExecutor):
     def __init__(self, model_factory: ModelFactory, max_concurrency: int):
-        super().__init__()
+        super().__init__(max_concurrency)
         self.model = model_factory.create()
-        self.max_concurrency = max_concurrency
 
     def __enter__(self):
         self.executor = concurrent.futures.ThreadPoolExecutor(
@@ -76,9 +73,8 @@ class ModelRunnerThreadPoolExecutorWithTLS(ModelRunnerPoolExecutor):
     tls: threading.local
 
     def __init__(self, model_factory: ModelFactory, max_concurrency: int):
-        super().__init__()
+        super().__init__(max_concurrency)
         self.model_factory = model_factory
-        self.max_concurrency = max_concurrency
 
     def __enter__(self):
         self.executor = concurrent.futures.ThreadPoolExecutor(
@@ -106,8 +102,7 @@ class ModelRunnerProcessPoolExecutor(ModelRunnerPoolExecutor):
     _model: Model
 
     def __init__(self, model_factory: ModelFactory, max_concurrency: int):
-        super().__init__()
-        self.max_concurrency = max_concurrency
+        super().__init__(max_concurrency)
         ModelRunnerProcessPoolExecutor._model = model_factory.create()
 
     def __enter__(self):
@@ -134,8 +129,8 @@ class ModelRunnerMultiProcessingPool(ModelRunner):
         max_concurrency: int,
     ):
         self.max_concurrency = max_concurrency
-        self.task: multiprocessing.ApplyResult = None
-        self.callback_fn: QueryCallback = None
+        self.task: typing.Optional[multiprocessing.pool.MapResult] = None
+        self.callback_fn: typing.Optional[QueryCallback] = None
         ModelRunnerMultiProcessingPool._model = model_factory.create()
 
     def __enter__(self):
@@ -155,7 +150,7 @@ class ModelRunnerMultiProcessingPool(ModelRunner):
             ModelRunnerMultiProcessingPool._predict_with_id, inputs
         )
 
-    def flush_queries(self) -> typing.Optional[QueryResult]:
+    def flush_queries(self):
         task_result = self.task.get()
         result = {query_id: query_result for query_id, query_result in task_result}
         self.callback_fn(result)
