@@ -5,7 +5,7 @@ import multiprocessing
 import threading
 import typing
 
-from loadgen.harness import ModelRunner, QueryInput, QueryResult
+from loadgen.harness import ModelRunner, QueryCallback, QueryInput, QueryResult
 from loadgen.model import Model, ModelFactory, ModelInput
 
 logger = logging.getLogger(__name__)
@@ -17,43 +17,43 @@ class ModelRunnerInline(ModelRunner):
     def __init__(self, model_factory: ModelFactory):
         self.model = model_factory.create()
 
-    def issue_query(self, queries: QueryInput) -> typing.Optional[QueryResult]:
-        result = dict()
+    def issue_query(self, queries: QueryInput, callback: QueryCallback):
         for query_id, model_input in queries.items():
             output = self.model.predict(model_input)
-            result[query_id] = output
-        return result
+            callback({query_id: output})
 
 
 class ModelRunnerPoolExecutor(ModelRunner):
     def __init__(self):
         self.executor: concurrent.futures.Executor = None
-        self.futures = None
+        self.futures: typing.Dict[concurrent.futures.Future, int] = {}
+        self.callback_fn: QueryCallback = None
 
     def __exit__(self, _exc_type, _exc_value, _traceback):
         if self.executor:
             self.executor.shutdown(True)
         return super().__exit__(_exc_type, _exc_value, _traceback)
 
-    def issue_query(self, queries: QueryInput) -> typing.Optional[QueryResult]:
-        self.futures = dict()
+    def issue_query(self, queries: QueryInput, callback: QueryCallback):
+        assert not self.futures
+        self.callback_fn = callback
         predictor_fn = self.get_predictor()
         for query_id, model_input in queries.items():
             f = self.executor.submit(predictor_fn, model_input)
             self.futures[f] = query_id
-        return None
+            f.add_done_callback(self._future_callback)
 
     def flush_queries(self) -> typing.Optional[QueryResult]:
-        result = dict()
-        for future in concurrent.futures.as_completed(self.futures.keys()):
-            query_id = self.futures[future]
-            query_result = future.result()
-            result[query_id] = query_result
-        return result
+        pass
 
     @abc.abstractmethod
     def get_predictor(self) -> typing.Callable[[ModelInput], typing.Any]:
         pass
+
+    def _future_callback(self, f: concurrent.futures.Future):
+        query_id = self.futures.pop(f)
+        query_result = f.result()
+        self.callback_fn({query_id: query_result})
 
 
 class ModelRunnerThreadPoolExecutor(ModelRunnerPoolExecutor):
@@ -135,6 +135,7 @@ class ModelRunnerMultiProcessingPool(ModelRunner):
     ):
         self.max_concurrency = max_concurrency
         self.task: multiprocessing.ApplyResult = None
+        self.callback_fn: QueryCallback = None
         ModelRunnerMultiProcessingPool._model = model_factory.create()
 
     def __enter__(self):
@@ -145,40 +146,21 @@ class ModelRunnerMultiProcessingPool(ModelRunner):
             self.pool.terminate()
         return super().__exit__(_exc_type, _exc_value, _traceback)
 
-    def issue_query(self, queries: QueryInput) -> typing.Optional[QueryResult]:
-        if hasattr(self, "tasks"):
-            assert len(self.tasks) == 0
-            for query_id, model_input in queries.items():
-                task = self.pool.apply_async(
-                    ModelRunnerMultiProcessingPool._predict, (model_input,)
-                )
-                self.tasks[task] = query_id
-        else:
-            assert self.task is None
-            inputs = [
-                [query_id, model_input] for query_id, model_input in queries.items()
-            ]
-            self.task = self.pool.starmap_async(
-                ModelRunnerMultiProcessingPool._predict_with_id, inputs
-            )
-            return None
+    def issue_query(self, queries: QueryInput, callback: QueryCallback):
+        assert self.task is None
+        assert self.callback_fn is None
+        inputs = [[query_id, model_input] for query_id, model_input in queries.items()]
+        self.callback_fn = callback
+        self.task = self.pool.starmap_async(
+            ModelRunnerMultiProcessingPool._predict_with_id, inputs
+        )
 
     def flush_queries(self) -> typing.Optional[QueryResult]:
-        if hasattr(self, "tasks"):
-            result = dict()
-            for task, query_id in self.tasks.items():
-                task_result = task.get()
-                result[query_id] = task_result
-            return result
-        else:
-            task_result = self.task.get()
-            result = {query_id: query_result for query_id, query_result in task_result}
-            return result
-
-    @staticmethod
-    def _predict(input: ModelInput):
-        result = ModelRunnerMultiProcessingPool._model.predict(input)
-        return result
+        task_result = self.task.get()
+        result = {query_id: query_result for query_id, query_result in task_result}
+        self.callback_fn(result)
+        self.task = None
+        self.callback_fn = None
 
     @staticmethod
     def _predict_with_id(query_id: int, input: ModelInput):

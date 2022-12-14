@@ -12,15 +12,16 @@ logger = logging.getLogger(__name__)
 
 QueryInput = typing.Dict[int, ModelInput]
 QueryResult = typing.Dict[int, typing.Any]
+QueryCallback = typing.Callable[[QueryResult], typing.Any]
 
 
 class ModelRunner(contextlib.AbstractContextManager):
     @abc.abstractmethod
-    def issue_query(self, query: QueryInput) -> typing.Optional[QueryResult]:
+    def issue_query(self, query: QueryInput, callback: QueryCallback):
         pass
 
     # Optional method to flush pending queries
-    def flush_queries(self) -> typing.Optional[QueryResult]:
+    def flush_queries(self):
         pass
 
     def __exit__(self, _exc_type, _exc_value, _traceback):
@@ -52,18 +53,14 @@ class Harness:
             # logger.info(f"Query Id: {q.id}, SampleIndex: {q.index}")
             input = self.samples[q.index]
             query_input[q.id] = input
-        result = self.runner.issue_query(query_input)
-        logger.info(f"Queries issued {len(query_input)}")
-        if result is not None:
-            self._complete_query(result)
+        logger.info(f"Issuing {len(query_input)} queries")
+        self.runner.issue_query(query_input, self._complete_query)
 
     # Called after the last call to issue queries in a series is made.
     # Client can use this to flush any deferred queries rather than waiting for a timeout.
     def flush_queries(self):
-        result = self.runner.flush_queries()
-        logger.info(f"Queries flushed")
-        if result is not None:
-            self._complete_query(result)
+        self.runner.flush_queries()
+        logger.info(f"Flushed")
 
     def _complete_query(self, result: QueryResult):
         responses = []
