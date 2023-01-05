@@ -43,19 +43,23 @@ class ORTModelFactory(ModelFactory):
     ):
         self.model_path = model_path
         self.execution_provider = execution_provider
-        self.session_options = ort.SessionOptions()
+        self.execution_mode = None
         if execution_mode.lower() == "sequential":
-            self.session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+            self.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
         elif execution_mode.lower() == "parallel":
-            self.session_options.execution_mode = ort.ExecutionMode.ORT_PARALLEL
-        self.session_options.intra_op_num_threads = intra_op_threads
-        self.session_options.inter_op_num_threads = inter_op_threads
+            self.execution_mode = ort.ExecutionMode.ORT_PARALLEL
+        self.intra_op_threads = intra_op_threads
+        self.inter_op_threads = inter_op_threads
 
     def create(self) -> Model:
         model = onnx.load(self.model_path)
+        session_options = ort.SessionOptions()
+        session_options.execution_mode = self.execution_mode
+        session_options.intra_op_num_threads = self.intra_op_threads
+        session_options.inter_op_num_threads = self.inter_op_threads
         session_eps = [self.execution_provider]
         session = ort.InferenceSession(
-            model.SerializeToString(), self.session_options, providers=session_eps
+            model.SerializeToString(), session_options, providers=session_eps
         )
         return ORTModel(session)
 

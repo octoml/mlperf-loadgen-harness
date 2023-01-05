@@ -45,3 +45,18 @@ For e.g.
 ```
 python src/main.py ../models/yolov5s.onnx --runner threadpool --ep CPUExecutionProvider --concurrency 4
 ```
+
+---
+Thelio Benchmarks
+
+YoloV5, CPUEP,  Inline,       0,  32.10 QPS
+
+YoloV5, CPUEP,  ThreadPool,   2,  36.53 QPS
+YoloV5, CPUEP,  ThreadPool,   4,  38.40 QPS
+YoloV5, CPUEP,  ThreadPool,   8,  35.70 QPS
+YoloV5, CPUEP,  ThreadPool,   16, 31.54 QPS
+
+YoloV5, CPUEP,  ProcessPool,  2,  13.14 QPS
+YoloV5, CPUEP,  ProcessPool,  4,  24.08 QPS
+YoloV5, CPUEP,  ProcessPool,  8,  32.93 QPS
+YoloV5, CPUEP,  ProcessPool,  16, 29.77 QPS

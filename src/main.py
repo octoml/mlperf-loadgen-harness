@@ -15,6 +15,7 @@ from loadgen.runners import (
     ModelRunnerProcessPoolExecutor,
     ModelRunnerThreadPoolExecutor,
     ModelRunnerThreadPoolExecutorWithTLS,
+    ModelRunnerRay,
 )
 from ort import ORTModelFactory, ORTModelInputSampler
 
@@ -64,13 +65,17 @@ def main(
         runner = ModelRunnerMultiProcessingPool(
             model_factory, max_concurrency=runner_concurrency
         )
+    elif runner_name == "ray":
+        runner = ModelRunnerRay(model_factory, max_concurrency=runner_concurrency)
     else:
         raise ValueError(f"Invalid runner {runner}")
 
     settings = mlperf_loadgen.TestSettings()
-    settings.scenario = mlperf_loadgen.TestScenario.Offline
     settings.mode = mlperf_loadgen.TestMode.PerformanceOnly
+
+    settings.scenario = mlperf_loadgen.TestScenario.Offline
     settings.offline_expected_qps = LOADGEN_EXPECTED_QPS
+
     settings.min_query_count = LOADGEN_SAMPLE_COUNT * 2
     settings.min_duration_ms = LOADGEN_DURATION_SEC * 1000
     # Duration isn't enforced in offline mode
@@ -151,6 +156,7 @@ if __name__ == "__main__":
             "threadpool+replication",
             "processpool",
             "processpool+mp",
+            "ray",
         ],
         default="inline",
     )

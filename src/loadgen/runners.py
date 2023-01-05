@@ -4,7 +4,9 @@ import logging
 import multiprocessing
 import threading
 import typing
+import ray
 
+from ray.util.actor_pool import ActorPool
 from loadgen.harness import ModelRunner, QueryCallback, QueryInput
 from loadgen.model import Model, ModelFactory, ModelInput
 
@@ -161,3 +163,56 @@ class ModelRunnerMultiProcessingPool(ModelRunner):
     def _predict_with_id(query_id: int, input: ModelInput):
         result = ModelRunnerMultiProcessingPool._model.predict(input)
         return (query_id, result)
+
+
+class ModelRunnerRay(ModelRunner):
+    @ray.remote
+    class RayModel:
+        def __init__(self, model_factory: ModelFactory):
+            self.model = model_factory.create()
+
+        def predict(self, query_id: int, input: ModelInput):
+            result = self.model.predict(input)
+            return (query_id, result)
+
+    def __init__(
+        self,
+        model_factory: ModelFactory,
+        max_concurrency: int,
+    ):
+        self.max_concurrency = max_concurrency
+        self.model_factory = model_factory
+
+    def __enter__(self):
+        self.instances = [
+            ModelRunnerRay.RayModel.remote(self.model_factory)
+            for _ in range(self.max_concurrency)
+        ]
+        self.pool = ActorPool(self.instances)
+        logger.info(f"Ray: Initialized with concurrency {self.max_concurrency}")
+
+    def __exit__(self, _exc_type, _exc_value, _traceback):
+        if ray.is_initialized():
+            ray.shutdown()
+            logger.info("Ray: Shutdown")
+        return super().__exit__(_exc_type, _exc_value, _traceback)
+
+    def issue_query(self, queries: QueryInput, callback: QueryCallback):
+        """
+        Another approach to using an actor pool
+        for query in queries.items():
+            self.pool.submit(
+                lambda actor, params: actor.predict.remote(params[0], params[1]), query
+            )
+        while self.pool.has_next():
+            query_id, prediction_result = self.pool.get_next()
+            callback_arg = {query_id: prediction_result}
+            callback(callback_arg)
+        """
+
+        results = self.pool.map(
+            lambda a, params: a.predict.remote(params[0], params[1]), queries.items()
+        )
+        for query_id, prediction_result in results:
+            callback_arg = {query_id: prediction_result}
+            callback(callback_arg)
