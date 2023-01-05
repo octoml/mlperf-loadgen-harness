@@ -8,9 +8,14 @@ import typing
 import mlperf_loadgen
 import psutil
 
+# import site
+# pip_package = "/home/giqbal/Source/triton/build/bindings/python/"
+# site.addsitedir(pip_package)
+
 from loadgen.harness import Harness, ModelRunner
 from loadgen.runners import (
     ModelRunnerInline,
+    ModelRunnerTriton,
     ModelRunnerMultiProcessingPool,
     ModelRunnerProcessPoolExecutor,
     ModelRunnerThreadPoolExecutor,
@@ -24,6 +29,10 @@ logger = logging.getLogger(__name__)
 LOADGEN_EXPECTED_QPS = 50
 LOADGEN_SAMPLE_COUNT = 100
 LOADGEN_DURATION_SEC = 10
+
+# LOADGEN_EXPECTED_QPS = 5
+# LOADGEN_SAMPLE_COUNT = 10
+# LOADGEN_DURATION_SEC = 1
 
 
 def main(
@@ -64,13 +73,20 @@ def main(
         runner = ModelRunnerMultiProcessingPool(
             model_factory, max_concurrency=runner_concurrency
         )
+    elif runner_name == "triton":
+        runner = ModelRunnerTriton(model_factory)
     else:
         raise ValueError(f"Invalid runner {runner}")
 
     settings = mlperf_loadgen.TestSettings()
-    settings.scenario = mlperf_loadgen.TestScenario.Offline
     settings.mode = mlperf_loadgen.TestMode.PerformanceOnly
+
+    settings.scenario = mlperf_loadgen.TestScenario.Offline
     settings.offline_expected_qps = LOADGEN_EXPECTED_QPS
+
+    # settings.scenario = mlperf_loadgen.TestScenario.Server
+    # settings.server_target_qps = LOADGEN_EXPECTED_QPS
+
     settings.min_query_count = LOADGEN_SAMPLE_COUNT * 2
     settings.min_duration_ms = LOADGEN_DURATION_SEC * 1000
     # Duration isn't enforced in offline mode
@@ -88,7 +104,7 @@ def main(
 
     log_settings = mlperf_loadgen.LogSettings()
     log_settings.log_output = output_settings
-    log_settings.enable_trace = False
+    log_settings.enable_trace = True
 
     logger.info(f"Model: {model_path}")
     logger.info(f"Runner: {runner_name}, Concurrency: {runner_concurrency}")
@@ -151,6 +167,7 @@ if __name__ == "__main__":
             "threadpool+replication",
             "processpool",
             "processpool+mp",
+            "triton",
         ],
         default="inline",
     )

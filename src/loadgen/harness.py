@@ -1,4 +1,5 @@
 import abc
+import time
 import contextlib
 import logging
 import typing
@@ -53,7 +54,8 @@ class Harness:
             # logger.info(f"Query Id: {q.id}, SampleIndex: {q.index}")
             input = self.samples[q.index]
             query_input[q.id] = input
-        logger.info(f"Issuing {len(query_input)} queries")
+            # print(f"Issuing {q.id}")
+        # logger.info(f"Issuing {len(query_input)} queries")
         self.runner.issue_query(query_input, self._complete_query)
 
     # Called after the last call to issue queries in a series is made.
@@ -65,9 +67,11 @@ class Harness:
     def _complete_query(self, result: QueryResult):
         responses = []
         for query_id, _query_result in result.items():
+            # time.sleep(1)
             response_data, response_size = 0, 0
             response = mlperf_loadgen.QuerySampleResponse(
                 query_id, response_data, response_size
             )
             responses.append(response)
+        # print(f"Complete {len(result)}")
         mlperf_loadgen.QuerySamplesComplete(responses)

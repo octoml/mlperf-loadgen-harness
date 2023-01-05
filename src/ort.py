@@ -41,7 +41,7 @@ class ORTModelFactory(ModelFactory):
         intra_op_threads=0,
         inter_op_threads=0,
     ):
-        self.model_path = model_path
+        self._model_path = model_path
         self.execution_provider = execution_provider
         self.session_options = ort.SessionOptions()
         if execution_mode.lower() == "sequential":
@@ -59,6 +59,10 @@ class ORTModelFactory(ModelFactory):
         )
         return ORTModel(session)
 
+    @property
+    def model_path(self) -> str:
+        return self._model_path
+
 
 class ORTModelInputSampler(ModelInputSampler):
     def __init__(self, model_factory: ORTModelFactory):
@@ -71,6 +75,7 @@ class ORTModelInputSampler(ModelInputSampler):
             input_dim = [
                 1 if (x is None or (type(x) is str)) else x for x in input.shape
             ]
+            # input_dim = [3, 640, 640]
             self.inputs[input_name] = (input_type, input_dim)
 
     def sample(self, id_: int) -> ModelInput:

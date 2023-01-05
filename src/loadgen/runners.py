@@ -4,6 +4,10 @@ import logging
 import multiprocessing
 import threading
 import typing
+import os
+import functools
+
+# import triton
 
 from loadgen.harness import ModelRunner, QueryCallback, QueryInput
 from loadgen.model import Model, ModelFactory, ModelInput
@@ -21,6 +25,50 @@ class ModelRunnerInline(ModelRunner):
         for query_id, model_input in queries.items():
             output = self.model.predict(model_input)
             callback({query_id: output})
+
+
+class ModelRunnerTriton(ModelRunner):
+    def __init__(self, model_factory: ModelFactory):
+        self.model_name = os.path.splitext(os.path.basename(model_factory.model_path))[
+            0
+        ]
+        self.executor = None
+        self.session = None
+        # self.executor = triton.Executor(
+        #     "/home/giqbal/Source/triton/developer_tools/server/examples/models",
+        #     "/home/giqbal/Source/triton/developer_tools/server/examples/backends",
+        # )
+
+        # self.session = self.executor.create_session(self.model_name)
+
+    def issue_query(self, queries: QueryInput, callback: QueryCallback):
+        # predict_cb = functools.partial(ModelRunnerTriton._triton_callback, callback)
+        predict_cb = functools.partial(ModelRunnerTriton._triton_callback_id, callback)
+        for query_id, model_input in queries.items():
+            # print(query_id)
+
+            # output = self.session.predict(model_input)
+            # callback({query_id: output})
+
+            # self.session.predict_with_callback(
+            #     model_input,
+            #     predict_cb,
+            #     query_id,
+            # )
+
+            self.session.predict_with_callback_queue(
+                model_input,
+                predict_cb,
+                query_id,
+            )
+
+    @staticmethod
+    def _triton_callback(query_cb: QueryCallback, query_id, query_result):
+        query_cb({query_id: None})
+
+    @staticmethod
+    def _triton_callback_id(query_cb: QueryCallback, query_id):
+        query_cb({query_id: None})
 
 
 class ModelRunnerPoolExecutor(ModelRunner):

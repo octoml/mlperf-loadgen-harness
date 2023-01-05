@@ -17,6 +17,11 @@ class ModelFactory(abc.ABC):
     def create(self) -> Model:
         pass
 
+    @property
+    @abc.abstractmethod
+    def model_path(self) -> str:
+        pass
+
 
 class ModelInputSampler(abc.ABC):
     @abc.abstractmethod
