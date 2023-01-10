@@ -3,7 +3,7 @@ import typing
 
 import numpy as np
 
-ModelInput = typing.Dict[str, np.array]
+ModelInput = typing.Dict[str, np.ndarray]
 
 
 class Model(abc.ABC):

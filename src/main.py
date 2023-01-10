@@ -7,19 +7,20 @@ import logging
 import os
 import re
 import typing
-from datetime import date
+from datetime import date, datetime
 
 import mlperf_loadgen
 import psutil
 
 from loadgen.harness import Harness, ModelRunner
 from loadgen.runners import (
+    ModelRunnerBatchedProcessPool,
+    ModelRunnerBatchedThreadPool,
     ModelRunnerInline,
-    ModelRunnerMultiProcessingPool,
     ModelRunnerProcessPoolExecutor,
     ModelRunnerRay,
     ModelRunnerThreadPoolExecutor,
-    ModelRunnerThreadPoolExecutorWithTLS,
+    ModelRunnerThreadPoolMultiInstanceExecutor,
 )
 from ort import ORTModelFactory, ORTModelInputSampler
 
@@ -33,6 +34,9 @@ LOADGEN_DURATION_SEC = 10
 
 @dataclasses.dataclass(frozen=True)
 class BenchmarkResult:
+    timestamp: datetime
+    execution_provider: str
+    execution_mode: str
     runner_name: str
     runner_concurrency: int
     intraop_threads: int
@@ -52,13 +56,6 @@ def benchmark(
     interop_threads: int,
 ) -> BenchmarkResult:
 
-    logger.info(
-        f"Benchmark Starting: Model: {model_path}, {execution_provider}, {execution_mode}"
-    )
-    logger.info(
-        f"- Parameters: {runner_name}, Concurrency: {runner_concurrency}, IntraOp: {intraop_threads}, InterOp: {interop_threads}"
-    )
-
     model_factory = ORTModelFactory(
         model_path,
         execution_provider,
@@ -77,22 +74,33 @@ def benchmark(
         runner = ModelRunnerThreadPoolExecutor(
             model_factory, max_concurrency=runner_concurrency
         )
-    elif runner_name == "threadpool+replication":
-        runner = ModelRunnerThreadPoolExecutorWithTLS(
+    elif runner_name == "threadpool+multiinstance":
+        runner = ModelRunnerThreadPoolMultiInstanceExecutor(
             model_factory, max_concurrency=runner_concurrency
         )
     elif runner_name == "processpool":
         runner = ModelRunnerProcessPoolExecutor(
             model_factory, max_concurrency=runner_concurrency
         )
-    elif runner_name == "processpool+mp":
-        runner = ModelRunnerMultiProcessingPool(
-            model_factory, max_concurrency=runner_concurrency
-        )
     elif runner_name == "ray":
         runner = ModelRunnerRay(model_factory, max_concurrency=runner_concurrency)
+    elif runner_name == "batchedthreadpool":
+        runner = ModelRunnerBatchedThreadPool(
+            model_factory, max_concurrency=runner_concurrency
+        )
+    elif runner_name == "batchedprocesspool":
+        runner = ModelRunnerBatchedProcessPool(
+            model_factory, max_concurrency=runner_concurrency
+        )
     else:
         raise ValueError(f"Invalid runner {runner}")
+
+    logger.info(
+        f"Benchmark Starting: Model: {model_path}, {execution_provider}, {execution_mode}"
+    )
+    logger.info(
+        f"- Parameters: {runner_name}, Concurrency: {runner_concurrency}, IntraOp: {intraop_threads}, InterOp: {interop_threads}"
+    )
 
     settings = mlperf_loadgen.TestSettings()
     settings.mode = mlperf_loadgen.TestMode.PerformanceOnly
@@ -165,6 +173,9 @@ def benchmark(
             logger.info(f"- Result: {result_valid}")
 
             result = BenchmarkResult(
+                timestamp=datetime.now(),
+                execution_provider=execution_provider,
+                execution_mode=execution_mode,
                 runner_name=runner_name,
                 runner_concurrency=runner_concurrency,
                 intraop_threads=intraop_threads,
@@ -196,13 +207,7 @@ def main(
     )
     os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)
     with open(output_csv_path, "a") as output_csv_file:
-        csv_headers = {
-            "execution_provider": execution_provider,
-            "execution_mode": execution_mode,
-        }
-        csv_fields = list(csv_headers.keys()) + [
-            f.name for f in dataclasses.fields(BenchmarkResult)
-        ]
+        csv_fields = [f.name for f in dataclasses.fields(BenchmarkResult)]
         csv_writer = csv.DictWriter(output_csv_file, fieldnames=csv_fields)
         csv_writer.writeheader()
 
@@ -229,7 +234,6 @@ def main(
             )
             csv_row = dataclasses.asdict(result)
             logger.info(f"Benchmark Result: {csv_row}")
-            csv_row.update(csv_headers)
             csv_writer.writerow(csv_row)
             output_csv_file.flush()
 
@@ -261,26 +265,28 @@ if __name__ == "__main__":
         choices=[
             "inline",
             "threadpool",
-            "threadpool+replication",
+            "threadpoolmultiinstance",
             "processpool",
-            "processpool+mp",
             "ray",
+            "batchedthreadpool",
+            "batchedprocesspool",
         ],
         default="inline",
         nargs="+",
     )
+
     parser.add_argument(
         "--concurrency",
         help="concurrency count for runner",
-        default=psutil.cpu_count(False),
+        default=[psutil.cpu_count(False)],
         type=int,
         nargs="+",
     )
     parser.add_argument(
-        "--intraop", help="IntraOp threads", default=0, type=int, nargs="+"
+        "--intraopthreads", help="IntraOp threads", default=[0], type=int, nargs="+"
     )
     parser.add_argument(
-        "--interop", help="InterOp threads", default=0, type=int, nargs="+"
+        "--interopthreads", help="InterOp threads", default=[0], type=int, nargs="+"
     )
 
     args = parser.parse_args()
@@ -291,6 +297,6 @@ if __name__ == "__main__":
         args.execmode,
         args.runner,
         args.concurrency,
-        args.intraop,
-        args.interop,
+        args.intraopthreads,
+        args.interopthreads,
     )

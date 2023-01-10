@@ -25,7 +25,6 @@ class ModelRunner(contextlib.AbstractContextManager):
         pass
 
     def __exit__(self, _exc_type, _exc_value, _traceback):
-        # logger.info(f"{self} : Exited")
         return None
 
 

@@ -12,7 +12,7 @@ from loadgen.model import Model, ModelFactory, ModelInput
 
 logger = logging.getLogger(__name__)
 
-######## Runner implementations
+######## Queue oriented Runners
 
 
 class ModelRunnerInline(ModelRunner):
@@ -71,7 +71,7 @@ class ModelRunnerThreadPoolExecutor(ModelRunnerPoolExecutor):
         return self.model.predict
 
 
-class ModelRunnerThreadPoolExecutorWithTLS(ModelRunnerPoolExecutor):
+class ModelRunnerThreadPoolMultiInstanceExecutor(ModelRunnerPoolExecutor):
     tls: threading.local
 
     def __init__(self, model_factory: ModelFactory, max_concurrency: int):
@@ -82,22 +82,22 @@ class ModelRunnerThreadPoolExecutorWithTLS(ModelRunnerPoolExecutor):
         self.executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=self.max_concurrency,
             thread_name_prefix="LoadGen",
-            initializer=ModelRunnerThreadPoolExecutorWithTLS._tls_init,
+            initializer=ModelRunnerThreadPoolMultiInstanceExecutor._tls_init,
             initargs=(self.model_factory,),
         )
         return self
 
     def get_predictor(self) -> typing.Callable[[ModelInput], typing.Any]:
-        return ModelRunnerThreadPoolExecutorWithTLS._tls_predict
+        return ModelRunnerThreadPoolMultiInstanceExecutor._tls_predict
 
     @staticmethod
     def _tls_init(model_factory: ModelFactory):
-        ModelRunnerThreadPoolExecutorWithTLS.tls = threading.local()
-        ModelRunnerThreadPoolExecutorWithTLS.tls.model = model_factory.create()
+        ModelRunnerThreadPoolMultiInstanceExecutor.tls = threading.local()
+        ModelRunnerThreadPoolMultiInstanceExecutor.tls.model = model_factory.create()
 
     @staticmethod
     def _tls_predict(input: ModelInput):
-        return ModelRunnerThreadPoolExecutorWithTLS.tls.model.predict(input)
+        return ModelRunnerThreadPoolMultiInstanceExecutor.tls.model.predict(input)
 
 
 class ModelRunnerProcessPoolExecutor(ModelRunnerPoolExecutor):
@@ -120,49 +120,6 @@ class ModelRunnerProcessPoolExecutor(ModelRunnerPoolExecutor):
     def _predict(input: ModelInput):
         result = ModelRunnerProcessPoolExecutor._model.predict(input)
         return result
-
-
-class ModelRunnerMultiProcessingPool(ModelRunner):
-    _model: Model
-
-    def __init__(
-        self,
-        model_factory: ModelFactory,
-        max_concurrency: int,
-    ):
-        self.max_concurrency = max_concurrency
-        self.task: typing.Optional[multiprocessing.pool.MapResult] = None
-        self.callback_fn: typing.Optional[QueryCallback] = None
-        ModelRunnerMultiProcessingPool._model = model_factory.create()
-
-    def __enter__(self):
-        self.pool = multiprocessing.Pool(self.max_concurrency)
-
-    def __exit__(self, _exc_type, _exc_value, _traceback):
-        if self.pool:
-            self.pool.terminate()
-        return super().__exit__(_exc_type, _exc_value, _traceback)
-
-    def issue_query(self, queries: QueryInput, callback: QueryCallback):
-        assert self.task is None
-        assert self.callback_fn is None
-        inputs = [[query_id, model_input] for query_id, model_input in queries.items()]
-        self.callback_fn = callback
-        self.task = self.pool.starmap_async(
-            ModelRunnerMultiProcessingPool._predict_with_id, inputs
-        )
-
-    def flush_queries(self):
-        task_result = self.task.get()
-        result = {query_id: query_result for query_id, query_result in task_result}
-        self.callback_fn(result)
-        self.task = None
-        self.callback_fn = None
-
-    @staticmethod
-    def _predict_with_id(query_id: int, input: ModelInput):
-        result = ModelRunnerMultiProcessingPool._model.predict(input)
-        return (query_id, result)
 
 
 class ModelRunnerRay(ModelRunner):
@@ -216,3 +173,86 @@ class ModelRunnerRay(ModelRunner):
         for query_id, prediction_result in results:
             callback_arg = {query_id: prediction_result}
             callback(callback_arg)
+
+
+######## Batch oriented runners
+
+
+def split(arr, count) -> typing.Sequence[typing.Tuple[int, int]]:
+    q, r = divmod(len(arr), count)
+    result = [(i * q + min(i, r), (i + 1) * q + min(i + 1, r)) for i in range(count)]
+    return result
+
+
+class ModelRunnerBatchedThreadPool(ModelRunner):
+    def __init__(self, model_factory: ModelFactory, max_concurrency: int):
+        self.model = model_factory.create()
+        self.max_concurrency = max_concurrency
+        self.executor: typing.Optional[concurrent.futures.Executor] = None
+        self.input_batch = None
+
+    def __enter__(self):
+        self.executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.max_concurrency, thread_name_prefix="LoadGen"
+        )
+        return self
+
+    def __exit__(self, _exc_type, _exc_value, _traceback):
+        if self.executor:
+            self.executor.shutdown(True)
+        return super().__exit__(_exc_type, _exc_value, _traceback)
+
+    def issue_query(self, queries: QueryInput, callback: QueryCallback):
+        assert self.input_batch is None
+        self.input_batch = list(queries.values())
+        input_ranges = split(self.input_batch, self.max_concurrency)
+        futures = []
+        for r in input_ranges:
+            f = self.executor.submit(self.predict_range, r)
+            futures.append(f)
+        concurrent.futures.wait(futures)
+        results = {query_id: None for query_id in queries.keys()}
+        callback(results)
+        self.input_batch = None
+
+    def predict_range(self, input_range: typing.Tuple[int, int]):
+        n = 0
+        for i in range(input_range[0], input_range[1]):
+            input = self.input_batch[i]
+            self.model.predict(input)
+            n += 1
+        return n
+
+
+class ModelRunnerBatchedProcessPool(ModelRunner):
+    _model: Model = None
+    _input_batch: typing.List[ModelInput] = None
+
+    def __init__(self, model_factory: ModelFactory, max_concurrency: int):
+        ModelRunnerBatchedProcessPool._model = model_factory.create()
+        self.concurrency = max_concurrency
+
+    def issue_query(self, queries: QueryInput, callback: QueryCallback):
+        assert ModelRunnerBatchedProcessPool._input_batch is None
+        ModelRunnerBatchedProcessPool._input_batch = list(queries.values())
+        input_ranges = split(
+            ModelRunnerBatchedProcessPool._input_batch, self.concurrency
+        )
+        logger.info(f"Split ranges: {input_ranges}")
+        with multiprocessing.Pool(self.concurrency) as pool:
+            task = pool.map_async(
+                ModelRunnerBatchedProcessPool._predict_range, input_ranges
+            )
+            task.wait()
+            results = {query_id: None for query_id in queries.keys()}
+            callback(results)
+        ModelRunnerBatchedProcessPool._input_batch = None
+
+    @staticmethod
+    def _predict_range(input_range: typing.Tuple[int, int]):
+        n = 0
+        for i in range(input_range[0], input_range[1]):
+            input = ModelRunnerBatchedProcessPool._input_batch[i]
+            ModelRunnerBatchedProcessPool._model.predict(input)
+            n += 1
+        return n
