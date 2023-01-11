@@ -239,13 +239,14 @@ class ModelRunnerBatchedProcessPool(ModelRunner):
             ModelRunnerBatchedProcessPool._input_batch, self.concurrency
         )
         logger.info(f"Split ranges: {input_ranges}")
-        with multiprocessing.Pool(self.concurrency) as pool:
+        with multiprocessing.Pool(self.concurrency, maxtasksperchild=1) as pool:
             task = pool.map_async(
                 ModelRunnerBatchedProcessPool._predict_range, input_ranges
             )
             task.wait()
-            results = {query_id: None for query_id in queries.keys()}
-            callback(results)
+
+        results = {query_id: None for query_id in queries.keys()}
+        callback(results)
         ModelRunnerBatchedProcessPool._input_batch = None
 
     @staticmethod

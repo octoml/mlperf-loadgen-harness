@@ -2,6 +2,7 @@ import argparse
 import contextlib
 import csv
 import dataclasses
+import gc
 import itertools
 import logging
 import os
@@ -224,6 +225,7 @@ def main(
             intraop_threads_list,
             interop_threads_list,
         ):
+            gc.collect()
             result = benchmark(
                 model_path,
                 model_input_dimensions,
