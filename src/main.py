@@ -47,6 +47,7 @@ class BenchmarkResult:
 
 def benchmark(
     model_path: str,
+    model_input_dimensions: typing.Dict[str, int],
     output_path: str,
     execution_provider: str,
     execution_mode: str,
@@ -64,7 +65,7 @@ def benchmark(
         interop_threads,
     )
 
-    model_dataset = ORTModelInputSampler(model_factory)
+    model_dataset = ORTModelInputSampler(model_factory, model_input_dimensions)
 
     runner: ModelRunner = None
     if runner_name == "inline":
@@ -193,6 +194,7 @@ def benchmark(
 
 def main(
     model_path: str,
+    model_input_dimensions: typing.Dict[str, int],
     output_path: typing.Optional[str],
     execution_provider: str,
     execution_mode: str,
@@ -224,6 +226,7 @@ def main(
         ):
             result = benchmark(
                 model_path,
+                model_input_dimensions,
                 output_path,
                 execution_provider=execution_provider,
                 execution_mode=execution_mode,
@@ -245,8 +248,10 @@ if __name__ == "__main__":
     )
 
     parser = argparse.ArgumentParser()
+    parser.add_argument("model_path", help="path to input model")
     parser.add_argument(
-        "model_path", help="path to input model", default="models/yolov5s.onnx"
+        "--model_input_dims",
+        help="specify values for any dynamic input dimensions, e.g. sequence=64,batch=128",
     )
     parser.add_argument("-o", "--output", help="path to store loadgen results")
     parser.add_argument(
@@ -290,8 +295,23 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+
+    model_path = args.model_path
+    model_input_dimensions = {}
+    if args.model_input_dims:
+        for dim_token in args.model_input_dims.split(","):
+            shape_tokens = dim_token.split("=")
+            if len(shape_tokens) != 2:
+                raise ValueError(
+                    f"Invalid input dimension token '{dim_token}' - Expected form dimension=value"
+                )
+            dim_name = shape_tokens[0].strip()
+            dim_size = int(shape_tokens[1].strip())
+            model_input_dimensions[dim_name] = dim_size
+
     main(
-        args.model_path,
+        model_path,
+        model_input_dimensions,
         args.output,
         args.ep,
         args.execmode,

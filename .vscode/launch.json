@@ -10,7 +10,16 @@
             "request": "launch",
             "program": "src/main.py",
             "console": "integratedTerminal",
-            "justMyCode": false
+            "justMyCode": false,
+            "args": [
+                "models/hf-distilbert-uncased.onnx",
+                "--model_input_dims",
+                "sequence=128",
+                "--ep",
+                "CPUExecutionProvider",
+                "--runner",
+                "inline",
+            ]
         }
     ]
 }

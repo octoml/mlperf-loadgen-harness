@@ -18,30 +18,34 @@ CFLAGS="-std=c++14 -O3" python setup.py bdist_wheel
 The following arguments are supported.
 
 ```
-usage: main.py [-h] [-o OUTPUT] [-r {inline,threadpool,threadpool+replication,processpool,processpool+mp}] [--concurrency CONCURRENCY] [--ep EP] [--intraop INTRAOP]
-               [--interop INTEROP] [--execmode {sequential,parallel}]
-               model_path
+usage: main.py  [-h] [-o OUTPUT] 
+                [--ep EP] [--execmode {sequential,parallel}]
+                [--intraopthreads INTRAOPTHREADS..] [--interopthreads INTEROPTHREADS..] 
+                [--runner {inline,threadpool,threadpoolmultiinstance,processpool,ray,batchedthreadpool,batchedprocesspool}...] 
+                [--concurrency CONCURRENCY...] 
+                [--model_input_dims x=1,y=2]
+                model_path
 
 positional arguments:
-  model_path            path to input model
+  model_path                        path to input model
 
 optional arguments:
-  -h, --help            show this help message and exit
-  -o, --output OUTPUT
-                        path to store loadgen results
+  -h, --help                        show this help message and exit
+  -o, --output OUTPUT               path to store loadgen results
   -r, --runner {inline,threadpool,threadpool+replication,processpool,processpool+mp}
-                        model runner
-  --concurrency CONCURRENCY
-                        concurrency count for runner
-  --ep EP               Execution Provider
-  --intraop INTRAOP     IntraOp threads
-  --interop INTEROP     InterOp threads
-  --execmode {sequential,parallel}
-                        Execution Mode
+                                    model runner
+  --concurrency CONCURRENCY         concurrency count for runner
+  --ep EP                           Execution Provider
+  --execmode {sequential,parallel}  Execution Mode (Default Sequential)
+  --intraop_threads INTRAOP         IntraOp threads
+  --interop_threads INTEROP         InterOp threads
+  --model_input_dims                Specific values for any dynamic input axes
  ```
 
 For e.g.
 
 ```
-python src/main.py ../models/yolov5s.onnx --runner threadpool --ep CPUExecutionProvider --concurrency 4
+python src/main.py models/yolov5s.onnx --ep CPUExecutionProvider --runner threadpool --concurrency 4
+python src/main.py models/yolov5s.onnx --ep CPUExecutionProvider --runner batchedthreadpool batchedprocesspool --concurrency 1 2 4 8 16 24 32 --intraopthreads 0 1 2 4 8 16 24 32  --interopthreads 0 1 2
+python src/main.py models/hf-distilbert-uncased.onnx --model_input_dims sequence=256,batch=2 --ep CPUExecutionProvider --runner inline
 ```

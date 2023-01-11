@@ -65,16 +65,24 @@ class ORTModelFactory(ModelFactory):
 
 
 class ORTModelInputSampler(ModelInputSampler):
-    def __init__(self, model_factory: ORTModelFactory):
+    def __init__(
+        self,
+        model_factory: ORTModelFactory,
+        model_input_dimensions: typing.Dict[str, int],
+    ):
         model = model_factory.create()
         input_defs = model.session.get_inputs()
         self.inputs: typing.Dict[str, typing.Tuple[np.dtype, typing.List[int]]] = dict()
         for input in input_defs:
             input_name = input.name
             input_type = ONNX_TO_NP_TYPE_MAP[input.type]
-            input_dim = [
-                1 if (x is None or (type(x) is str)) else x for x in input.shape
-            ]
+            input_dim = []
+            for shape in input.shape:
+                if type(shape) is str:
+                    dynamic_shape_value = model_input_dimensions.get(shape, 1)
+                    input_dim.append(dynamic_shape_value)
+                else:
+                    input_dim.append(1 if shape is None else shape)
             self.inputs[input_name] = (input_type, input_dim)
 
     def sample(self, id_: int) -> ModelInput:
